@@ -10,6 +10,8 @@ import { secondsByDuration } from 'utils/constants';
 import useModifyStream from 'queries/useModifyStream';
 import { BeatLoader } from 'react-spinners';
 import { useIntl, useTranslations } from 'next-intl';
+import useBatchCalls from 'queries/useBatchCalls';
+import { Interface } from 'ethers/lib/utils';
 
 interface ModifyProps {
   data: IStream;
@@ -21,6 +23,10 @@ interface IUpdatedFormElements {
   modifiedStreamDuration: { value: 'month' | 'year' | 'week' };
 }
 
+const CreateInterface = new Interface(['function createStream(address to, uint216 amountPerSec)']);
+const ModifyInterface = new Interface([
+  'function modifyStream(address oldTo, uint216 oldAmountPerSec, address to, uint216 amountPerSec)',
+]);
 export const Modify = ({ data }: ModifyProps) => {
   const amountPerSec = Number(data.amountPerSec) / 1e20;
 
@@ -29,6 +35,7 @@ export const Modify = ({ data }: ModifyProps) => {
   const { mutate: modifyStream, isLoading, data: transaction } = useModifyStream();
 
   const transactionDialog = useDialogState();
+  const { mutate: batchCall } = useBatchCalls();
 
   const savedAddressName =
     useAddressStore((state) => state.addressBook.find((p) => p.id === data.payeeAddress))?.shortName ??
@@ -45,21 +52,36 @@ export const Modify = ({ data }: ModifyProps) => {
 
     const updatedAmountPerSec = new BigNumber(updatedAmount).times(1e20).div(secondsByDuration[duration]).toFixed(0);
 
-    modifyStream(
-      {
+    if (data.paused) {
+      batchCall({
         llamaContractAddress: data.llamaContractAddress,
-        payeeAddress: data.payeeAddress,
-        amountPerSec: data.amountPerSec,
-        updatedAddress,
-        updatedAmountPerSec,
-      },
-      {
-        onSettled: () => {
-          dialog.toggle();
-          transactionDialog.toggle();
+        calls: [
+          CreateInterface.encodeFunctionData('createStream', [data.payeeAddress, data.amountPerSec]),
+          ModifyInterface.encodeFunctionData('modifyStream', [
+            data.payeeAddress,
+            data.payerAddress,
+            updatedAddress,
+            updatedAmountPerSec,
+          ]),
+        ],
+      });
+    } else {
+      modifyStream(
+        {
+          llamaContractAddress: data.llamaContractAddress,
+          payeeAddress: data.payeeAddress,
+          amountPerSec: data.amountPerSec,
+          updatedAddress,
+          updatedAmountPerSec,
         },
-      }
-    );
+        {
+          onSettled: () => {
+            dialog.toggle();
+            transactionDialog.toggle();
+          },
+        }
+      );
+    }
   };
 
   const intl = useIntl();
@@ -70,14 +92,9 @@ export const Modify = ({ data }: ModifyProps) => {
 
   return (
     <>
-      {data.paused ? (
-        ''
-      ) : (
-        <button className="row-action-links dark:text-white" onClick={dialog.toggle}>
-          {t1('modify')}
-        </button>
-      )}
-
+      <button className="row-action-links dark:text-white" onClick={dialog.toggle}>
+        {t1('modify')}
+      </button>
       <FormDialog dialog={dialog} title={t1('modify')} className="h-min">
         <span className="space-y-4 text-[#303030]">
           <section>
